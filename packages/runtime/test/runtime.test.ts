@@ -29201,6 +29201,10 @@ describe("runtime / variables visible to nodes", () => {
       config: {
         prompt: "Return JSON",
         jsonOutput: true,
+        maxTokens: 2_048,
+        maxTokensVariable: "$var:LLM_FLOW_MAX_OUTPUT_TOKENS",
+        reasoningEffort: "$var:LLM_STRUCTURED_REASONING_EFFORT",
+        thinkingMode: "$var:LLM_STRUCTURED_THINKING_MODE",
         providerOptions: { "openai-compatible": { reasoningEffort: "low" } },
       },
     });
@@ -29209,11 +29213,22 @@ describe("runtime / variables visible to nodes", () => {
     flow.connect(llm.out("out"), end.in("in"));
     await registerAndPromote(rt, flow);
 
-    const result = await rt.invocationRouter.invoke({ flowId: "llm_json_config", input: null });
+    const result = await rt.invocationRouter.invoke({
+      flowId: "llm_json_config",
+      input: null,
+      variables: new InMemoryVariableStore([
+        { name: "LLM_STRUCTURED_REASONING_EFFORT", value: "low" },
+        { name: "LLM_STRUCTURED_THINKING_MODE", value: "disabled" },
+        { name: "LLM_FLOW_MAX_OUTPUT_TOKENS", value: 16_384 },
+      ]),
+    });
 
     expect(result.succeeded).toBe(true);
     expect(observed).toMatchObject({
       jsonOutput: true,
+      maxTokens: 16_384,
+      reasoningEffort: "low",
+      thinkingMode: "disabled",
       providerOptions: { "openai-compatible": { reasoningEffort: "low" } },
     });
   });

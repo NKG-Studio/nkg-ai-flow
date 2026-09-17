@@ -98,6 +98,48 @@ describe("flow-ir / Zod schema", () => {
     };
     expect(FlowGraphSchema.safeParse(bad).success).toBe(false);
   });
+
+  it("accepts Flow-owned user-configurable Runtime variable metadata", () => {
+    const graph = {
+      id: "f",
+      version: "1.0.0",
+      schemaVersion: FLOW_GRAPH_SCHEMA_VERSION,
+      configurableVariables: [{
+        name: "LLM_FLOW_MAX_OUTPUT_TOKENS",
+        label: "最大输出 Token",
+        description: "仅作用于当前对话",
+        type: "select",
+        defaultValue: 6144,
+        options: [
+          { label: "8K", value: 8192 },
+          { label: "16K", value: 16384 },
+        ],
+      }],
+      nodes: [],
+      edges: [],
+    };
+
+    expect(FlowGraphSchema.safeParse(graph).success).toBe(true);
+  });
+
+  it("rejects unsafe or incomplete configurable Runtime variables", () => {
+    const base = {
+      id: "f",
+      version: "1.0.0",
+      schemaVersion: FLOW_GRAPH_SCHEMA_VERSION,
+      nodes: [],
+      edges: [],
+    };
+
+    expect(FlowGraphSchema.safeParse({
+      ...base,
+      configurableVariables: [{ name: "bad-name", label: "Bad", type: "string" }],
+    }).success).toBe(false);
+    expect(FlowGraphSchema.safeParse({
+      ...base,
+      configurableVariables: [{ name: "MODE", label: "Mode", type: "select" }],
+    }).success).toBe(false);
+  });
 });
 
 describe("flow-ir / errors", () => {

@@ -88,6 +88,33 @@ export interface Viewport {
   zoom: number;
 }
 
+/** Primitive value accepted by a user-configurable Runtime variable. */
+export type FlowConfigurableVariableValue = string | number | boolean;
+
+/** A labelled value shown by select-style Flow configuration controls. */
+export interface FlowConfigurableVariableOption {
+  label: string;
+  value: FlowConfigurableVariableValue;
+}
+
+/**
+ * Flow-owned declaration for a safe Runtime variable that the host may expose
+ * to users. Values are supplied per invocation; this metadata never stores a
+ * user's selected value or a secret.
+ */
+export interface FlowConfigurableVariable {
+  name: string;
+  label: string;
+  description?: string;
+  type: "string" | "number" | "boolean" | "select";
+  defaultValue?: FlowConfigurableVariableValue;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: FlowConfigurableVariableOption[];
+}
+
 /** The canonical Flow Graph JSON contract. */
 export interface FlowGraph {
   /** Stable, business-meaningful flow id, e.g. "research-flow". */
@@ -107,6 +134,8 @@ export interface FlowGraph {
   inputSchema?: unknown;
   /** Optional flow-level output schema (JSON-Schema-compatible). */
   outputSchema?: unknown;
+  /** Runtime variables explicitly exposed as user-configurable Flow inputs. */
+  configurableVariables?: FlowConfigurableVariable[];
   nodes: NodeInstance[];
   edges: EdgeDefinition[];
   viewport?: Viewport;

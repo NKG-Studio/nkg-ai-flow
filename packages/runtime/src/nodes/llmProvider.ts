@@ -70,6 +70,18 @@ export interface LlmCompletionRequest {
    */
   jsonOutput?: boolean;
   /**
+   * Standard OpenAI-compatible reasoning level. The adapter maps this to
+   * `reasoning_effort`; compatible gateways such as Gemini's OpenAI layer can
+   * then translate it to their native thinking controls.
+   */
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high";
+  /**
+   * OpenAI-compatible thinking toggle. DeepSeek V4 defaults this to enabled;
+   * structured planners can disable it so the output budget is reserved for
+   * the JSON body instead of reasoning_content.
+   */
+  thinkingMode?: "enabled" | "disabled";
+  /**
    * Vendor-specific request fields passed through verbatim, keyed by provider
    * name (e.g. `{ lfzxb: { thinking: { type: "disabled" } } }`). The
    * OpenAI-compatible adapter spreads any key not in its own option schema
@@ -193,6 +205,10 @@ export interface GenerateCompletionParams {
   providerName?: string;
   /** When true, request strict JSON via `response_format: { type: "json_object" }`. */
   jsonOutput?: boolean;
+  /** Standard OpenAI-compatible reasoning level. */
+  reasoningEffort?: LlmCompletionRequest["reasoningEffort"];
+  /** OpenAI-compatible thinking toggle, forwarded as `thinking.type`. */
+  thinkingMode?: LlmCompletionRequest["thinkingMode"];
   /** Vendor-specific body fields, keyed by provider name (spread verbatim by the adapter). */
   providerOptions?: ProviderOptions;
   /**
@@ -226,7 +242,7 @@ export interface GenerateCompletionParams {
 function buildProviderOptions(
   params: Pick<
     GenerateCompletionParams,
-    "providerName" | "providerOptions" | "jsonOutput"
+    "providerName" | "providerOptions" | "jsonOutput" | "reasoningEffort" | "thinkingMode"
   >,
 ): { providerName: string; providerOptions: ProviderOptions } {
   const providerName = params.providerName ?? "openai-compatible";
@@ -254,6 +270,19 @@ function buildProviderOptions(
     // Only set when the caller hasn't already provided a response_format.
     if (!("response_format" in bucket)) {
       bucket.response_format = { type: "json_object" };
+    }
+  }
+  if (params.reasoningEffort) {
+    const bucket = (providerOptions[providerName] ??= {});
+    // Explicit raw provider options remain the final authority.
+    if (!("reasoningEffort" in bucket) && !("reasoning_effort" in bucket)) {
+      bucket.reasoningEffort = params.reasoningEffort;
+    }
+  }
+  if (params.thinkingMode) {
+    const bucket = (providerOptions[providerName] ??= {});
+    if (!("thinking" in bucket)) {
+      bucket.thinking = { type: params.thinkingMode };
     }
   }
   return { providerName, providerOptions };
@@ -453,34 +482,47 @@ export class AiSdkOpenAICompatibleLlmProvider implements LlmProvider {
     const { baseUrl, apiKey, modelId } = this.resolveCallConfig(req, ctx);
 
     try {
-      const completion = await generateJsonCompletion({
-        baseUrl,
-        apiKey,
-        model: modelId,
-        prompt: req.prompt,
-        images: req.images,
-        temperature: req.temperature,
-        maxTokens: req.maxTokens,
-        providerName: this.options.providerName,
-        jsonOutput: req.jsonOutput,
-        providerOptions: req.providerOptions,
-        abortSignal: ctx.signal,
-        fetchImpl: this.options.fetchImpl,
-      });
-      if (!completion.text.trim()) {
-        throw new RuntimeErrorException(
-          createRuntimeError({
-            code: "node.llm.empty_response",
-            kind: "unavailable",
-            category: "external",
-            retryable: true,
-            message: "AI SDK LLM provider returned an empty completion",
-            source: { module: "node_logic", nodeId: ctx.nodeId },
-            context: { model: modelId, provider: this.options.providerName ?? "openai-compatible" },
-          }),
-        );
+      const maxAttempts = 2;
+      let lastCompletion: LlmCompletionResponse | undefined;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const completion = await generateJsonCompletion({
+          baseUrl,
+          apiKey,
+          model: modelId,
+          prompt: attempt === 1
+            ? req.prompt
+            : emptyCompletionRetryPrompt(req.prompt, req.jsonOutput === true),
+          images: req.images,
+          temperature: req.temperature,
+          maxTokens: req.maxTokens,
+          providerName: this.options.providerName,
+          jsonOutput: req.jsonOutput,
+          reasoningEffort: req.reasoningEffort,
+          thinkingMode: retryThinkingMode(req, modelId, attempt),
+          providerOptions: req.providerOptions,
+          abortSignal: ctx.signal,
+          fetchImpl: this.options.fetchImpl,
+        });
+        if (completion.text.trim()) return completion;
+        lastCompletion = completion;
+        if (attempt < maxAttempts && !ctx.signal.aborted) continue;
       }
-      return completion;
+      throw new RuntimeErrorException(
+        createRuntimeError({
+          code: "node.llm.empty_response",
+          kind: "unavailable",
+          category: "external",
+          retryable: true,
+          message: "AI SDK LLM provider returned an empty completion after retry",
+          source: { module: "node_logic", nodeId: ctx.nodeId },
+          context: {
+            model: modelId,
+            provider: this.options.providerName ?? "openai-compatible",
+            attempts: maxAttempts,
+            usage: lastCompletion?.usage,
+          },
+        }),
+      );
     } catch (cause) {
       if (cause instanceof RuntimeErrorException) throw cause;
       throw new RuntimeErrorException(
@@ -503,6 +545,8 @@ export class AiSdkOpenAICompatibleLlmProvider implements LlmProvider {
       temperature: req.temperature,
       maxTokens: req.maxTokens,
       providerName: this.options.providerName,
+      reasoningEffort: req.reasoningEffort,
+      thinkingMode: req.thinkingMode,
       providerOptions: req.providerOptions,
       fetchImpl: this.options.fetchImpl,
       abortSignal: ctx.signal,
@@ -519,20 +563,24 @@ export class AiSdkOpenAICompatibleLlmProvider implements LlmProvider {
 
     try {
       return aiSdkTextStreamToEvents(
-        streamCompletion({
+        (attempt) => streamCompletion({
           baseUrl,
           apiKey,
           model: modelId,
-          prompt: req.prompt,
+          prompt: attempt === 1
+            ? req.prompt
+            : emptyCompletionRetryPrompt(req.prompt, req.jsonOutput === true),
           images: req.images,
           temperature: req.temperature,
           maxTokens: req.maxTokens,
           providerName: this.options.providerName,
           jsonOutput: req.jsonOutput,
+          reasoningEffort: req.reasoningEffort,
+          thinkingMode: retryThinkingMode(req, modelId, attempt, true),
           providerOptions: req.providerOptions,
           abortSignal: ctx.signal,
           fetchImpl: this.options.fetchImpl,
-        }),
+        })(),
         { nodeId: ctx.nodeId, maxAttempts: 2 },
       );
     } catch (cause) {
@@ -544,13 +592,37 @@ export class AiSdkOpenAICompatibleLlmProvider implements LlmProvider {
   }
 }
 
+function emptyCompletionRetryPrompt(prompt: string, jsonOutput: boolean): string {
+  const instruction = jsonOutput
+    ? "The previous attempt returned empty content. Return exactly one complete, non-empty JSON object now, with no markdown or explanatory text."
+    : "The previous attempt returned empty content. Return a complete, non-empty answer now.";
+  return `${prompt.trimEnd()}\n\n${instruction}`;
+}
+
+function retryThinkingMode(
+  req: LlmCompletionRequest,
+  modelId: string,
+  attempt: number,
+  disableDeepSeekThinkingForAnyEmptyOutput = false,
+): LlmCompletionRequest["thinkingMode"] {
+  if (req.thinkingMode) return req.thinkingMode;
+  if (
+    attempt > 1
+    && (req.jsonOutput === true || disableDeepSeekThinkingForAnyEmptyOutput)
+    && /^deepseek-v4(?:[-.]|$)/i.test(modelId.trim())
+  ) {
+    return "disabled";
+  }
+  return undefined;
+}
+
 async function* aiSdkTextStreamToEvents(
-  createTextStream: () => AsyncIterable<AiStreamEvent>,
+  createTextStream: (attempt: number) => AsyncIterable<AiStreamEvent>,
   options: { nodeId?: string; maxAttempts: number },
 ): AiStreamAsyncIterable {
   for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
     let text = "";
-    for await (const event of createTextStream()) {
+    for await (const event of createTextStream(attempt)) {
       if (event.kind === "text_delta") text += event.text;
       yield event;
     }

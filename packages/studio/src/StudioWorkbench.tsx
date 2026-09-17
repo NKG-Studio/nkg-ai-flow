@@ -9,6 +9,11 @@ import {
 } from "react";
 import { ReactFlowStudio } from "./ReactFlowStudio.js";
 import { FlowRunController } from "./FlowRunController.js";
+import {
+  RuntimeConsole,
+  type ConsoleEntry,
+  type ConsoleLevel,
+} from "./RuntimeConsole.js";
 import { createStudioState } from "./viewModel.js";
 import { SidecarClient, type EnvOverrides } from "./httpClient.js";
 import type { StudioPaletteItem, StudioState } from "./types.js";
@@ -30,6 +35,8 @@ import {
 // Bundlers resolve this to a URL; the ambient declaration in assets.d.ts
 // keeps the import type-safe.
 import iconUrl from "./icon.png";
+
+export type { ConsoleEntry, ConsoleLevel } from "./RuntimeConsole.js";
 
 /** Default sidecar location - single-machine local dev convention. */
 const DEFAULT_SIDECAR_URL = "http://127.0.0.1:5173";
@@ -71,15 +78,6 @@ export interface FlowEntry {
    * Access API handle stored on the tab.
    */
   sidecarPath?: string;
-}
-
-export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
-
-export interface ConsoleEntry {
-  id: number;
-  ts: number;
-  level: ConsoleLevel;
-  message: string;
 }
 
 export interface StudioWorkbenchProps {
@@ -1059,36 +1057,13 @@ export function StudioWorkbench({
                 role="separator"
                 aria-orientation="horizontal"
               />
-              <div className="anf-console" style={{ height: consoleHeight }}>
-                <div className="anf-console-header">
-                  <div className="anf-console-tabs">
-                    <span className="anf-console-tab is-active">CONSOLE</span>
-                    <span className="anf-console-counter">{logs.length}</span>
-                  </div>
-                  <span className="anf-explorer-spacer" />
-                  <button
-                    type="button"
-                    className="anf-console-action"
-                    title="Clear console"
-                    onClick={() => setLogs([])}
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="anf-console-body">
-                  {logs.length === 0 ? (
-                    <div className="anf-console-empty">No log output yet.</div>
-                  ) : (
-                    logs.map((entry) => (
-                      <div key={entry.id} className={`anf-console-line anf-console-line--${entry.level}`}>
-                        <span className="anf-console-time">{formatTs(entry.ts)}</span>
-                        <span className={`anf-console-level anf-console-level--${entry.level}`}>{entry.level}</span>
-                        <span className="anf-console-message">{entry.message}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+              <RuntimeConsole
+                clearLabel="Clear"
+                clearTitle="Clear console"
+                entries={logs}
+                height={consoleHeight}
+                onClear={() => setLogs([])}
+              />
             </>
           ) : null}
         </section>
@@ -1217,12 +1192,6 @@ function TreeRow({
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-function formatTs(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function uniqueFlowId(tabs: TabState[], proposed: string): string {

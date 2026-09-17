@@ -180,6 +180,33 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
     expect(mocks.providerModel).toHaveBeenCalledWith("override-model");
   });
 
+  it("forwards structured JSON, reasoning, and thinking controls in the matching provider bucket", async () => {
+    const provider = new AiSdkOpenAICompatibleLlmProvider();
+    await provider.complete(
+      {
+        prompt: "return json",
+        jsonOutput: true,
+        reasoningEffort: "low",
+        thinkingMode: "disabled",
+      },
+      context({
+        baseUrl: "https://api.example.test/v1",
+        model: "gemini-3.1-pro-preview",
+        apiKey: "sk-test",
+      }),
+    );
+
+    expect(mocks.generateText).toHaveBeenCalledWith(expect.objectContaining({
+      providerOptions: {
+        "openai-compatible": {
+          response_format: { type: "json_object" },
+          reasoningEffort: "low",
+          thinking: { type: "disabled" },
+        },
+      },
+    }));
+  });
+
   it("delegates the complete agent tool loop to AI SDK", async () => {
     const execute = vi.fn(async (input: Record<string, unknown>) => ({ input, ok: true }));
     mocks.generateText.mockResolvedValueOnce({
@@ -263,7 +290,7 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
     expect(mocks.providerModel).toHaveBeenCalledWith("deepseek-v4-flash");
   });
 
-  it("rejects empty AI SDK completions as retryable provider failures", async () => {
+  it("retries an empty JSON completion with an explicit non-empty instruction", async () => {
     mocks.generateText.mockResolvedValueOnce({
       text: "   ",
       usage: {
@@ -272,6 +299,40 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
         totalTokens: 11,
       },
     });
+    const provider = new AiSdkOpenAICompatibleLlmProvider();
+
+    await expect(provider.complete(
+      { prompt: "return json", jsonOutput: true },
+      context({
+        baseUrl: "https://api.example.test/v1",
+        model: "deepseek-v4-flash",
+        apiKey: "sk-test",
+      }),
+    )).resolves.toMatchObject({ text: "{\"ok\":true}" });
+
+    expect(mocks.generateText).toHaveBeenCalledTimes(2);
+    const retryCall = mocks.generateText.mock.calls[1] as unknown[] | undefined;
+    expect(retryCall?.[0]).toMatchObject({
+      prompt: expect.stringContaining("Return exactly one complete, non-empty JSON object"),
+      providerOptions: {
+        "openai-compatible": {
+          response_format: { type: "json_object" },
+          thinking: { type: "disabled" },
+        },
+      },
+    });
+  });
+
+  it("rejects repeated empty AI SDK completions as retryable provider failures", async () => {
+    const empty = {
+      text: "   ",
+      usage: {
+        inputTokens: 11,
+        outputTokens: 0,
+        totalTokens: 11,
+      },
+    };
+    mocks.generateText.mockResolvedValueOnce(empty).mockResolvedValueOnce(empty);
     const provider = new AiSdkOpenAICompatibleLlmProvider({
       providerName: "lfzxb",
     });
@@ -292,6 +353,7 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
         "node.llm.empty_response",
       );
       expect((err as RuntimeErrorException).error.retryable).toBe(true);
+      expect((err as RuntimeErrorException).error.message).toContain("after retry");
     }
   });
 
@@ -359,7 +421,9 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
   it("retries empty AI SDK streams before failing", async () => {
     mocks.streamText
       .mockReturnValueOnce({
-        fullStream: mocks.textPartsOf([]),
+        fullStream: mocks.fullStreamOf([
+          { type: "reasoning-delta", text: "第一轮只产生思考，没有正文。" },
+        ]),
       })
       .mockReturnValueOnce({
         fullStream: mocks.textPartsOf(["{\"ok\":true}"]),
@@ -381,10 +445,21 @@ describe("AiSdkOpenAICompatibleLlmProvider", () => {
     }
 
     expect(mocks.streamText).toHaveBeenCalledTimes(2);
+    const retryCall = mocks.streamText.mock.calls[1] as unknown[] | undefined;
+    expect(retryCall?.[0]).toMatchObject({
+      prompt: expect.stringContaining("Return a complete, non-empty answer now"),
+      providerOptions: {
+        lfzxb: { thinking: { type: "disabled" } },
+      },
+    });
     expect(events.at(-1)).toEqual({
       kind: "done",
       text: "{\"ok\":true}",
       finishReason: "stop",
+    });
+    expect(events[0]).toEqual({
+      kind: "thinking_delta",
+      text: "第一轮只产生思考，没有正文。",
     });
   });
 

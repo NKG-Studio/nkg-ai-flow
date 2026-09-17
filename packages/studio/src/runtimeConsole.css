@@ -1,0 +1,138 @@
+.anf-console {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 80px;
+  max-height: 480px;
+  overflow: hidden;
+  border-top: 1px solid var(--vsc-border-soft, #2a2a2a);
+  color: var(--vsc-fg, #cccccc);
+  background: var(--vsc-bg-deep, #1b1b1b);
+}
+
+.anf-console-header {
+  height: 30px;
+  display: flex;
+  flex: 0 0 30px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--vsc-border-soft, #2a2a2a);
+  background: var(--vsc-bg-tabs, #2d2d2d);
+}
+
+.anf-console-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.anf-console-tab {
+  position: relative;
+  padding: 6px 0;
+  color: var(--vsc-fg-soft, #a0a0a0);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.anf-console-tab.is-active {
+  color: var(--vsc-fg-strong, #ffffff);
+}
+
+.anf-console-tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--vsc-accent, #4ea1ff);
+  content: "";
+}
+
+.anf-console-counter {
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: var(--vsc-fg-soft, #a0a0a0);
+  background: var(--vsc-bg-hover, rgba(255, 255, 255, .07));
+  font-size: 10px;
+}
+
+.anf-console-spacer {
+  flex: 1 1 auto;
+}
+
+.anf-console-action {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  color: var(--vsc-fg-soft, #a0a0a0);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  appearance: none;
+}
+
+.anf-console-action:hover {
+  color: var(--vsc-fg-strong, #ffffff);
+  background: var(--vsc-bg-hover, rgba(255, 255, 255, .07));
+}
+
+.anf-console-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px 0;
+  overflow-y: auto;
+  font: 12.5px/1.55 "Cascadia Code", "Fira Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.anf-console-empty {
+  padding: 12px 16px;
+  color: var(--vsc-fg-muted, #6a6a6a);
+  font-style: italic;
+}
+
+.anf-console-line {
+  display: grid;
+  grid-template-columns: 70px 56px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px 16px;
+}
+
+.anf-console-line:hover {
+  background: var(--vsc-bg-hover, rgba(255, 255, 255, .07));
+}
+
+.anf-console-time {
+  color: var(--vsc-fg-muted, #6a6a6a);
+  font-variant-numeric: tabular-nums;
+}
+
+.anf-console-level {
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.anf-console-level--log { color: var(--vsc-fg-soft, #a0a0a0); background: rgba(255, 255, 255, .05); }
+.anf-console-level--info { color: var(--vsc-info, #75beff); background: rgba(117, 190, 255, .1); }
+.anf-console-level--warn { color: var(--vsc-warn, #d7ba7d); background: rgba(215, 186, 125, .12); }
+.anf-console-level--error { color: var(--vsc-error, #f48771); background: rgba(244, 135, 113, .14); }
+.anf-console-level--debug { color: var(--vsc-debug, #b388ff); background: rgba(179, 136, 255, .12); }
+
+.anf-console-message {
+  min-width: 0;
+  color: var(--vsc-fg, #cccccc);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.anf-console-line--warn .anf-console-message { color: var(--vsc-warn, #d7ba7d); }
+.anf-console-line--error .anf-console-message { color: var(--vsc-error, #f48771); }
+.anf-console-line--debug .anf-console-message { color: var(--vsc-debug, #b388ff); }

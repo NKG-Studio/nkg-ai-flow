@@ -75,10 +75,29 @@ const llmConfig = z
       .max(32_000)
       .default(DEFAULT_MAX_TOKENS)
       .describe("最大输出标记数。"),
+    maxTokensVariable: z
+      .string()
+      .regex(/^\$var:[A-Za-z0-9_.:-]+$/)
+      .optional()
+      .describe("可选运行变量；存在时覆盖最大输出标记数。"),
     stream: z
       .boolean()
       .optional()
       .describe("生成时将内容流式输出到回答通道。"),
+    reasoningEffort: z
+      .union([
+        z.enum(["none", "minimal", "low", "medium", "high"]),
+        z.string().regex(/^\$var:[A-Za-z0-9_.:-]+$/),
+      ])
+      .optional()
+      .describe("推理强度，或运行变量引用；变量未设置时不发送该参数。"),
+    thinkingMode: z
+      .union([
+        z.enum(["enabled", "disabled"]),
+        z.string().regex(/^\$var:[A-Za-z0-9_.:-]+$/),
+      ])
+      .optional()
+      .describe("思考模式开关，或运行变量引用；结构化输出可禁用深度思考。"),
   })
   .passthrough();
 
@@ -111,11 +130,14 @@ export const llmNode = defineNodeFactory<{ llmProvider: LlmProvider }>(
           control: "textarea",
           label: "提示词",
           placeholder: "输入提示词模板...",
-          order: 6,
+          order: 7,
         },
         temperature: { label: "温度", order: 4 },
         maxTokens: { label: "最大输出标记数", order: 5 },
-        stream: { label: "流式输出", control: "switch", order: 7 },
+        maxTokensVariable: { label: "最大输出覆盖变量", order: 6 },
+        stream: { label: "流式输出", control: "switch", order: 8 },
+        reasoningEffort: { label: "推理强度", order: 9 },
+        thinkingMode: { label: "思考模式", order: 10 },
       },
       ports: [
         {
@@ -167,11 +189,19 @@ export const llmNode = defineNodeFactory<{ llmProvider: LlmProvider }>(
         const request: LlmCompletionRequest = {
           prompt,
           temperature: config.temperature,
-          maxTokens: config.maxTokens,
+          maxTokens: resolveMaxTokens(
+            config.maxTokens ?? DEFAULT_MAX_TOKENS,
+            config.maxTokensVariable,
+            ctx,
+          ),
           stream: wantStream || undefined,
           jsonOutput: config.jsonOutput === true || undefined,
           ...(multimodalPrompt?.images.length ? { images: multimodalPrompt.images } : {}),
         };
+        const reasoningEffort = resolveReasoningEffort(config.reasoningEffort, ctx);
+        if (reasoningEffort) request.reasoningEffort = reasoningEffort;
+        const thinkingMode = resolveThinkingMode(config.thinkingMode, ctx);
+        if (thinkingMode) request.thinkingMode = thinkingMode;
         if (config.providerOptions && typeof config.providerOptions === "object" && !Array.isArray(config.providerOptions)) {
           request.providerOptions = config.providerOptions as LlmCompletionRequest["providerOptions"];
         }
@@ -403,4 +433,39 @@ function resolveConfigStringRef(
   const ref = /^\$(?:var|secret):([A-Za-z0-9_.:-]+)$/.exec(value.trim());
   if (!ref?.[1]) return value;
   return ctx.variables.getString(ref[1]) ?? value;
+}
+
+function resolveReasoningEffort(
+  value: string | undefined,
+  ctx: { variables: { getString(name: string): string | undefined } },
+): LlmCompletionRequest["reasoningEffort"] {
+  const resolved = resolveConfigStringRef(value, ctx);
+  if (
+    resolved === "none" ||
+    resolved === "minimal" ||
+    resolved === "low" ||
+    resolved === "medium" ||
+    resolved === "high"
+  ) return resolved;
+  return undefined;
+}
+
+function resolveMaxTokens(
+  fallback: number,
+  variableRef: string | undefined,
+  ctx: { variables: { getNumber(name: string): number | undefined } },
+): number {
+  const name = variableRef?.trim().match(/^\$var:([A-Za-z0-9_.:-]+)$/)?.[1];
+  if (!name) return fallback;
+  const value = ctx.variables.getNumber(name);
+  if (value === undefined) return fallback;
+  return Number.isInteger(value) && value >= 1 && value <= 32_000 ? value : fallback;
+}
+
+function resolveThinkingMode(
+  value: string | undefined,
+  ctx: { variables: { getString(name: string): string | undefined } },
+): LlmCompletionRequest["thinkingMode"] {
+  const resolved = resolveConfigStringRef(value, ctx);
+  return resolved === "enabled" || resolved === "disabled" ? resolved : undefined;
 }

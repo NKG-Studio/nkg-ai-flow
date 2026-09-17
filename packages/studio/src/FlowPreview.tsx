@@ -18,6 +18,11 @@ import {
   deriveRuntimeDebugNodeState,
   type RuntimeDebugEvent,
 } from "./runtimeDebug.js";
+import {
+  RuntimeConsole,
+  type ConsoleEntry,
+  type ConsoleLevel,
+} from "./RuntimeConsole.js";
 import type { StudioNodeStatus } from "./types.js";
 
 export type FlowPreviewGraph = FlowGraph;
@@ -60,21 +65,34 @@ export function FlowPreview({
     () => createFlowPreviewElements(graph, runtimeEvents),
     [graph, runtimeEvents],
   );
+  const consoleEntries = useMemo(
+    () => createFlowPreviewConsoleEntries(graph, runtimeEvents),
+    [graph, runtimeEvents],
+  );
 
   if (projection.nodes.length === 0) {
     return <div className={`anf-flow-preview-empty ${className}`.trim()}>该 Flow 暂无节点</div>;
   }
 
   return (
-    <ReactFlowProvider>
-      <FlowPreviewCanvas
-        ariaLabel={ariaLabel ?? `${graph.label ?? graph.id} 执行流程`}
-        className={className}
-        edges={projection.edges}
-        nodes={projection.nodes}
-        topologyKey={`${graph.id}@${graph.version}:${graph.nodes.map((node) => node.id).join(",")}`}
+    <>
+      <ReactFlowProvider>
+        <FlowPreviewCanvas
+          ariaLabel={ariaLabel ?? `${graph.label ?? graph.id} 执行流程`}
+          className={className}
+          edges={projection.edges}
+          nodes={projection.nodes}
+          topologyKey={`${graph.id}@${graph.version}:${graph.nodes.map((node) => node.id).join(",")}`}
+        />
+      </ReactFlowProvider>
+      <RuntimeConsole
+        ariaLabel={`${graph.label ?? graph.id} 节点日志`}
+        className="anf-flow-preview-console"
+        emptyText="等待节点输出…"
+        entries={consoleEntries}
+        title="节点日志"
       />
-    </ReactFlowProvider>
+    </>
   );
 }
 
@@ -190,6 +208,170 @@ export function createFlowPreviewElements(
       };
     }),
   };
+}
+
+export function createFlowPreviewConsoleEntries(
+  graph: FlowPreviewGraph,
+  runtimeEvents: ReadonlyArray<FlowPreviewRuntimeEvent> = [],
+): ConsoleEntry[] {
+  const labelById = new Map(graph.nodes.map((node) => [node.id, previewNodeLabel(node)]));
+  const entries = runtimeEvents.flatMap((event, index) => {
+    const entry = runtimeEventConsoleEntry(event, index + 1, labelById);
+    return entry ? [entry] : [];
+  });
+
+  for (const [nodeIndex, node] of graph.nodes.entries()) {
+    const streaming = currentStreamingConsoleEntry(
+      runtimeEvents,
+      node.id,
+      runtimeEvents.length + nodeIndex + 1,
+      labelById.get(node.id) ?? node.id,
+    );
+    if (streaming) entries.push(streaming);
+  }
+
+  return entries.sort((left, right) => left.ts - right.ts || left.id - right.id);
+}
+
+function runtimeEventConsoleEntry(
+  event: FlowPreviewRuntimeEvent,
+  id: number,
+  labelById: ReadonlyMap<string, string>,
+): ConsoleEntry | undefined {
+  const payload = asPreviewRecord(event.payload);
+  const node = event.nodeId
+    ? `[${labelById.get(event.nodeId) ?? event.nodeId}] `
+    : "";
+  const ts = previewEventTimestamp(event);
+  switch (event.kind) {
+    case "run_started":
+      return { id, ts, level: "info", message: "▶ Flow 开始执行" };
+    case "run_finished":
+      return {
+        id,
+        ts,
+        level: "info",
+        message: Object.prototype.hasOwnProperty.call(payload, "output")
+          ? `✓ Flow 执行完成\n${formatPreviewOutput(payload.output)}`
+          : "✓ Flow 执行完成",
+      };
+    case "run_failed":
+      return {
+        id,
+        ts,
+        level: "error",
+        message: `✕ Flow 执行失败\n${formatPreviewOutput(payload.error ?? payload.message ?? "未知错误")}`,
+      };
+    case "run_cancelled":
+      return { id, ts, level: "warn", message: "Flow 执行已取消" };
+    case "node_started":
+      return { id, ts, level: "debug", message: `${node}→ 开始执行` };
+    case "node_finished":
+      return {
+        id,
+        ts,
+        level: "info",
+        message: Object.prototype.hasOwnProperty.call(payload, "output")
+          ? `${node}←\n${formatPreviewOutput(payload.output)}`
+          : `${node}← 执行完成`,
+      };
+    case "node_error":
+    case "node_failed":
+      return {
+        id,
+        ts,
+        level: "error",
+        message: `${node}执行失败\n${formatPreviewOutput(payload.error ?? payload.message ?? "未知错误")}`,
+      };
+    case "node_warning":
+      return {
+        id,
+        ts,
+        level: "warn",
+        message: `${node}${formatPreviewOutput(payload.message ?? payload)}`,
+      };
+    case "node_log":
+      return {
+        id,
+        ts,
+        level: consoleLevel(payload.level),
+        message: `${node}${formatPreviewOutput(payload.message ?? payload)}`,
+      };
+    default:
+      return undefined;
+  }
+}
+
+function currentStreamingConsoleEntry(
+  events: ReadonlyArray<FlowPreviewRuntimeEvent>,
+  nodeId: string,
+  id: number,
+  label: string,
+): ConsoleEntry | undefined {
+  const nodeEvents = events.filter((event) => event.nodeId === nodeId);
+  let startedAt = -1;
+  for (let index = nodeEvents.length - 1; index >= 0; index -= 1) {
+    if (nodeEvents[index]?.kind === "node_started") {
+      startedAt = index;
+      break;
+    }
+  }
+  const currentAttempt = nodeEvents.slice(Math.max(0, startedAt));
+  if (currentAttempt.some((event) =>
+    event.kind === "node_finished"
+      || event.kind === "node_error"
+      || event.kind === "node_failed",
+  )) return undefined;
+
+  const deltas = currentAttempt.filter((event) => event.kind === "stream_delta");
+  const text = deltas.map((event) => formatStreamChunk(event.payload)).join("");
+  if (!text) return undefined;
+  return {
+    id,
+    ts: previewEventTimestamp(deltas.at(-1)!),
+    level: "info",
+    message: `[${label}] ← 实时输出\n${text}`,
+  };
+}
+
+function consoleLevel(value: unknown): ConsoleLevel {
+  return value === "log"
+    || value === "info"
+    || value === "warn"
+    || value === "error"
+    || value === "debug"
+    ? value
+    : "info";
+}
+
+function formatStreamChunk(payload: unknown): string {
+  if (typeof payload === "string") return payload;
+  const record = asPreviewRecord(payload);
+  for (const key of ["text", "delta", "content"]) {
+    if (typeof record[key] === "string") return record[key];
+  }
+  return Object.keys(record).length > 0 ? formatPreviewOutput(record) : "";
+}
+
+function formatPreviewOutput(value: unknown): string {
+  if (typeof value === "string") return value || "（空字符串）";
+  if (value === undefined) return "（无输出）";
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function asPreviewRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function previewEventTimestamp(event: FlowPreviewRuntimeEvent): number {
+  const timestamp = Date.parse(event.timestamp);
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 const PREVIEW_NODE_WIDTH = 220;

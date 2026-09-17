@@ -9,5 +9,6 @@ export * from "./ReactFlowStudio.js";
 export * from "./runtimeDebug.js";
 export * from "./StudioWorkbench.js";
 export * from "./FlowRunController.js";
+export * from "./RuntimeConsole.js";
 export * from "./httpClient.js";
 export * from "./fields/index.js";
