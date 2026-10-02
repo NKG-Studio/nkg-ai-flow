@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/assets/readme-cover.png" alt="NKG AI Flow cover" width="100%" />
+  <img src="docs/assets/nkg-icon-master.png" alt="NKG AI Flow · AF" width="360" />
 </p>
 
 <h1 align="center">NKG AI Flow</h1>
